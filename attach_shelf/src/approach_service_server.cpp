@@ -157,6 +157,26 @@ class serviceServer : public rclcpp::Node
          
     }
 
+    int countLegs(const std::vector<int>& intensities) {
+    int threshold = 7800;  // This can be adjusted based on actual data
+    int count = 0;
+    bool inLeg = false;
+
+    for (int i = 0; i < intensities.size(); ++i) {
+        // If the current intensity is above the threshold and we're not already counting a leg
+        if (intensities[i] > threshold && !inLeg) {
+            inLeg = true;
+            count++;
+        } 
+        // If the intensity drops below the threshold, stop counting this leg
+        else if (intensities[i] <= threshold) {
+            inLeg = false;
+        }
+    }
+    
+    return count;
+}
+
     void createTF(){
         //create a TransformStamped message called t
         geometry_msgs::msg::TransformStamped t;
@@ -279,20 +299,22 @@ int main(int argc, char **argv)
 
 
 
+
+
 //statistical inferencing {
 
-0, 0, 0, 0, 8000, 8000, 8000, 8000, 0, 0, 0, 0, 8000, 8000, 8000, 8000, 0
+//0, 0, 0, 0, 8000, 8000, 8000, 8000, 0, 0, 0, 0, 8000, 8000, 8000, 8000, 0
 
 // subtract second value from first and take absolute
-0, 0, 0, 0, 8000, 0, 0, 0, 8000, 0, 0, 0, 8000, 0, 0, 0, 8000, 0
+//0, 0, 0, 0, 8000, 0, 0, 0, 8000, 0, 0, 0, 8000, 0, 0, 0, 8000, 0
 
 //replace all 8000's with 1's 
-0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0
+//0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0
 
 // sum the array 
-4
+//4
 
 //divide sum by 2
-2
+//2
 
 //}
