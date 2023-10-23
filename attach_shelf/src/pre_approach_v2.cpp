@@ -4,6 +4,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "checkpoint5_interfaces/srv/go_to_loading.hpp"
+#include "std_srvs/srv/detail/set_bool__struct.hpp"
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <chrono>
@@ -27,42 +28,40 @@ public:
     this->get_parameter("obstacle_distance", obstacle_distance_);
     this->get_parameter("degrees", degrees_);
     degrees_ = degrees_ * M_PI / 180.0; // Convert degrees to radians
-
-
-
-
-
+    
     // Subscribe to the /scan topic
     scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/scan", 10,
-        std::bind(&ObstacleAvoidanceNode::scanCallback, this,
-                  std::placeholders::_1));
+        "/scan", 10, std::bind(&ObstacleAvoidanceNode::scanCallback, this, std::placeholders::_1));
     
-
     // Subscribe to the /odom topic to get the robot's yaw angle
     odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", 10,
-        std::bind(&ObstacleAvoidanceNode::odometryCallback, this,
-                  std::placeholders::_1));
+        "/odom", 10, std::bind(&ObstacleAvoidanceNode::odometryCallback, this, std::placeholders::_1));
 
     // Publish to the /robot/cmd_vel topic
     cmd_vel_publisher_ =
         this->create_publisher<geometry_msgs::msg::Twist>("/robot/cmd_vel", 10);
 
     // Set the linear velocity to move the robot forward
-    linear_velocity_ =
-        0.2; // You can adjust this value to your desired velocity
+    linear_velocity_ = 0.2; 
 
     // Create a timer to periodically check for obstacles and control the robot
     timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
-        std::bind(&ObstacleAvoidanceNode::callService, this));
+        std::bind(&ObstacleAvoidanceNode::timer_callback, this));
 
     //create a client to call the checkpoint5_interface::srv::GoToLoading service
-    approach_shelf_client_ = this->create_client<checkpoint5_interfaces::srv::GoToLoading>("/approach_shelf");
+    client_ = this->create_client<std_srvs::srv::SetBool>("/approach_shelf");
+ 
+  }
+
+  bool is_service_done() const {
+    // inspired from action client c++ code
+    return this->service_done_;
+
   }
 
 private:
+
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan) {
     float min_distance = *std::min_element(scan->ranges.begin(), scan->ranges.end());
 
@@ -102,7 +101,7 @@ private:
   }
 
 
-  void callService() {
+ /*void callService() {
     
     //create a request
     auto request = std::make_shared<checkpoint5_interfaces::srv::GoToLoading::Request>();
@@ -118,13 +117,36 @@ private:
 
   auto result_future = approach_shelf_client_->async_send_request(request, std::bind(&ObstacleAvoidanceNode::response_callback, this, std::placeholders::_1));
   
+  }*/
+
+  void timer_callback() {
+    while (!client_->wait_for_service(1s)) {
+      if (rclcpp::ok()) {
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "Client interrupted while waiting for service. Terminating...");
+        return;
+      }
+      RCLCPP_INFO(this->get_logger(),
+                  "Service Unavailable. Waiting for Service...");
+    }
+
+    auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
+    // set request variables here, if any
+    request->data = true; // comment this line if using Empty() message
+
+    service_done_ = false; // inspired from action client c++ code
+    auto result_future = client_->async_send_request(
+        request, std::bind(&ObstacleAvoidanceNode::response_callback, this,
+                           std::placeholders::_1));
   }
 
+
   void response_callback(
-      rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedFuture future) {
+    rclcpp::Client<std_srvs::srv::SetBool>::SharedFuture future) {
     auto status = future.wait_for(1s);
     if (status == std::future_status::ready) {
-      service_response_ = future.get()->complete;
+      service_response_ = future.get()->success;
       RCLCPP_INFO(this->get_logger(), "Result: success: %d", service_response_);
       service_done_ = true;
     } else {
@@ -182,14 +204,13 @@ private:
     }
 
     cmd_vel_publisher_->publish(twist);
-    //call service
-    callService();
 }
 
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
-  rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr approach_shelf_client_;
+  //rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr approach_shelf_client_;
+  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr client_;
   //create a memeber for
 
   //create a memeber for service response
@@ -202,6 +223,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   bool service_done_ = false;
   bool service_response_ = false;
+
 };
 
 
@@ -209,9 +231,9 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
 // Create the ObstacleAvoidanceNode with parameter values
   auto obstacle_avoidance_node = std::make_shared<ObstacleAvoidanceNode>();
-
-  // Spin the node
-  rclcpp::spin(obstacle_avoidance_node);
+   while (!obstacle_avoidance_node->is_service_done()) {
+    rclcpp::spin_some(obstacle_avoidance_node);
+  }
 
   rclcpp::shutdown();
   return 0;

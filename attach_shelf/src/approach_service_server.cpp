@@ -67,11 +67,13 @@ class serviceServer : public rclcpp::Node
         RCLCPP_INFO(this->get_logger(), "Requested /attach_shelf Service: %d", request->data);
         if (request->data == true){
 
-        detectLeg();    
+        detectLeg();
+        response->success = true;    
         
         }else{
         
             RCLCPP_INFO(this->get_logger(), "Server Not Started: ");
+            response->success = false;
         
         }
       
