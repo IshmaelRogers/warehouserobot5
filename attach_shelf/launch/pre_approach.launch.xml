@@ -1,5 +1,5 @@
 <launch>
-  <node pkg="attach_shelf" exec="pre_approach" name="pre_approach_node">
+  <node pkg="attach_shelf" exec="pre_approach" name="pre_approach_">
     <param name="obstacle" value="0.3"/>
     <param name="degrees" value="90.0"/>
   </node>

@@ -59,9 +59,14 @@ private:
       stopRobot();
       alignToShelf();
     } else if (aligning_to_shelf_ && std::abs(yaw_ - degrees_) < 0.05) {
-      // Continue aligning to the shelf until the desired angle is reached
+      // Once the desired angle is reached, print the laser intensities
+      RCLCPP_INFO(this->get_logger(), "Laser intensities when aligned with shelf:");
+      for (auto intensity : scan->intensities) {
+          RCLCPP_INFO(this->get_logger(), "%f", intensity);
+      }
+      
+      // Stop the robot after printing
       stopRobot();
-      alignToShelf();
     } else if (!stop_rotation_) {
       // If the robot is not already stopped and not aligning to the shelf, move
       // it forward
@@ -140,6 +145,7 @@ private:
     }
 
     cmd_vel_publisher_->publish(twist);
+
 }
 
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;

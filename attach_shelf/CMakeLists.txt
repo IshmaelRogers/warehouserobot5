@@ -16,16 +16,17 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(checkpoint5_interfaces)
+find_package(std_srvs)
 
 add_executable(pre_approach src/pre_approach.cpp)
 ament_target_dependencies(pre_approach rclcpp sensor_msgs geometry_msgs nav_msgs tf2 tf2_geometry_msgs tf2_ros)
 
-add_executable(pre_approach_v2 src/pre_approach_v2.cpp)
-ament_target_dependencies(pre_approach_v2 rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs checkpoint5_interfaces nav_msgs)
+#add_executable(pre_approach_v2 src/pre_approach_v2.cpp)
+#ament_target_dependencies(pre_approach_v2 rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs checkpoint5_interfaces nav_msgs)
 
 # Add the approach_service_server node
 add_executable(approach_service_server src/approach_service_server.cpp)
-ament_target_dependencies(approach_service_server rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs checkpoint5_interfaces)
+ament_target_dependencies(approach_service_server rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs std_srvs)
 
 
 if(BUILD_TESTING)
@@ -42,7 +43,7 @@ endif()
 
 install(TARGETS
   pre_approach
-  pre_approach_v2
+  #pre_approach_v2
   approach_service_server
   DESTINATION lib/${PROJECT_NAME}
 )
