@@ -39,7 +39,7 @@ ament_target_dependencies(pre_approach_v2 rclcpp std_msgs sensor_msgs geometry_m
 
 # Add the approach_service_server node
 add_executable(approach_service_server src/approach_service_server.cpp)
-ament_target_dependencies(approach_service_server rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs std_srvs checkpoint5_interfaces)
+ament_target_dependencies(approach_service_server rclcpp std_msgs sensor_msgs geometry_msgs tf2_ros tf2 tf2_msgs std_srvs checkpoint5_interfaces nav_msgs)
 
 
 if(BUILD_TESTING)
