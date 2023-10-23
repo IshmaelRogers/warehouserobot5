@@ -1,4 +1,5 @@
 #include "geometry_msgs/msg/twist.hpp"
+#include "checkpoint5_interfaces/srv/detail/go_to_loading__struct.hpp"
 #include "nav_msgs/msg/detail/odometry__struct.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/client.hpp"
@@ -27,6 +28,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/detail/set_bool__struct.hpp"
 #include "std_srvs/srv/set_bool.hpp"
+#include "checkpoint5_interfaces/srv/go_to_loading.hpp"
+
 
 using Empty = std_srvs::srv::Empty;
 using std::placeholders::_1;
@@ -53,27 +56,27 @@ class serviceServer : public rclcpp::Node
     {
         
         laser_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 10, std::bind(&serviceServer::laserCallback, this, _1));
-        srv_ = create_service<std_srvs::srv::SetBool>("attach_shelf", std::bind(&serviceServer::handleService, this, std::placeholders::_1, std::placeholders::_2));
+        srv_ = create_service<checkpoint5_interfaces::srv::GoToLoading>("attach_shelf", std::bind(&serviceServer::handleService, this, std::placeholders::_1, std::placeholders::_2));
         
 
     }
 
     private:
 
-    void handleService(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-      const std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+    void handleService(const std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Request> request,
+      const std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Response> response)
       {
 
-        RCLCPP_INFO(this->get_logger(), "Requested /attach_shelf Service: %d", request->data);
-        if (request->data == true){
+        RCLCPP_INFO(this->get_logger(), "Requested /attach_shelf Service: %d", request->attach_to_shelf);
+        if (request->attach_to_shelf == true){
 
         detectLeg();
-        response->success = true;    
+        response->complete = true;    
         
         }else{
         
             RCLCPP_INFO(this->get_logger(), "Server Not Started: ");
-            response->success = false;
+            response->complete = false;
         
         }
       
@@ -132,7 +135,7 @@ class serviceServer : public rclcpp::Node
     sensor_msgs::msg::LaserScan::SharedPtr laser_msg_;
     //vector for legs
     std::vector<Leg> legs;
-    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_;
+    rclcpp::Service<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr srv_;
     
 
 

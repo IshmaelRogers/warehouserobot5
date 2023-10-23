@@ -9,6 +9,8 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <chrono>
 #include <mutex>
+#include "checkpoint5_interfaces/srv/go_to_loading.hpp"
+
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
@@ -50,7 +52,7 @@ public:
         std::bind(&ObstacleAvoidanceNode::timer_callback, this));
 
     //create a client to call the checkpoint5_interface::srv::GoToLoading service
-    client_ = this->create_client<std_srvs::srv::SetBool>("/approach_shelf");
+    client_ = this->create_client<checkpoint5_interfaces::srv::GoToLoading>("/approach_shelf");
  
   }
 
@@ -131,9 +133,9 @@ private:
                   "Service Unavailable. Waiting for Service...");
     }
 
-    auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
+    auto request = std::make_shared<checkpoint5_interfaces::srv::GoToLoading::Request>();
     // set request variables here, if any
-    request->data = true; // comment this line if using Empty() message
+    request->attach_to_shelf = true; // comment this line if using Empty() message
 
     service_done_ = false; // inspired from action client c++ code
     auto result_future = client_->async_send_request(
@@ -143,10 +145,10 @@ private:
 
 
   void response_callback(
-    rclcpp::Client<std_srvs::srv::SetBool>::SharedFuture future) {
+    rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedFuture future) {
     auto status = future.wait_for(1s);
     if (status == std::future_status::ready) {
-      service_response_ = future.get()->success;
+      service_response_ = future.get()->complete;
       RCLCPP_INFO(this->get_logger(), "Result: success: %d", service_response_);
       service_done_ = true;
     } else {
@@ -210,7 +212,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
   //rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr approach_shelf_client_;
-  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr client_;
+  rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr client_;
   //create a memeber for
 
   //create a memeber for service response

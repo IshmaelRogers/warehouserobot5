@@ -15,6 +15,7 @@
   <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>std_srvs</depend>
+  <depend>checkpoint5_interfaces</depend>
 
   <depend>rosidl_default_generators</depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
