@@ -9,6 +9,7 @@
 #include "rclcpp/subscription_options.hpp"
 #include "sensor_msgs/msg/detail/laser_scan__struct.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "std_msgs/msg/detail/empty__struct.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include <chrono>
@@ -26,6 +27,7 @@
 #include "std_srvs/srv/set_bool.hpp"
 #include "checkpoint5_interfaces/srv/go_to_loading.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
+#include "std_msgs/msg/empty.hpp"
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -71,6 +73,13 @@ class serviceServer : public rclcpp::Node
         tfBuffer = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         //create tf listener
         tfListener = std::make_shared<tf2_ros::TransformListener>(*tfBuffer);
+        
+        //create a publisher for elevator up and down
+        elevator_up_pub_ = this->create_publisher<std_msgs::msg::Empty>("/elevator_up", 10);
+        elevator_down_pub_ = this->create_publisher<std_msgs::msg::Empty>("/elevator_down", 10);
+
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+        //tf_publisher_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this)
 
     }
 
@@ -81,9 +90,18 @@ class serviceServer : public rclcpp::Node
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr vel_pub_;
     rclcpp::Service<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr approach_service_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    
+    
+    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr elevator_up_pub_;
+    rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr elevator_down_pub_;
+
+    //broadcaster for cartTF
+    //static tf2_ros::StaticTransformBroadcaster static_broadcaster;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::CallbackGroup::SharedPtr clbg;
     std::unique_ptr<tf2_ros::Buffer> tfBuffer;
     std::shared_ptr<tf2_ros::TransformListener> tfListener{nullptr};
+
 
     int front;
     int num_rays;
@@ -224,10 +242,213 @@ class serviceServer : public rclcpp::Node
 
     }
 
-   void approachCallback(const std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Request> request, std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Response> response)
-    {
+    //function to set the cartTF frame
+    void cartTFSet(){
+
+        geometry_msgs::msg::TransformStamped cartTF;    
         
+        cartTF.header.stamp = this->now();
+        cartTF.header.frame_id = "robot/base_link";
+        cartTF.child_frame_id = "cartTF";
+        cartTF.transform.translation.x = midPoint.x;
+        cartTF.transform.translation.y = midPoint.y;
+        cartTF.transform.translation.z = 0.0;
+        cartTF.transform.rotation.x = 0.0;
+        cartTF.transform.rotation.y = 0.0;
+        cartTF.transform.rotation.z = 0.0;
+        cartTF.transform.rotation.w = 1.0;
+        tf_broadcaster_->sendTransform(cartTF);
+        
+
     }
+
+    void moveRobotToCartTF()
+    {
+        geometry_msgs::msg::TransformStamped transformStamped;
+
+        while (rclcpp::ok()) 
+        {
+            try 
+            {
+                transformStamped = tfBuffer->lookupTransform("robot/base_link", "cart_frame", rclcpp::Time(0));
+            } 
+            catch (tf2::TransformException &ex) 
+            {
+                RCLCPP_WARN(this->get_logger(), "%s", ex.what());
+                rclcpp::sleep_for(500ms);
+                continue;
+            }
+
+            // Calculate the difference between the cart frame position and the current robot position
+            double dx = transformStamped.transform.translation.x - current_x;
+            double dy = transformStamped.transform.translation.y - current_y;
+
+            // Calculate yaw angle to target
+            double target_yaw = atan2(dy, dx);
+            
+            // Create a twist message
+            geometry_msgs::msg::Twist cmd;
+            double xMax = 0.5, xMin = 0.05, zMax = 0.5, zMin = 0.05;
+            double linear_threshold = 0.1, angular_threshold = 0.05; // Example threshold values.
+
+            // Linear control for moving towards the cart frame.
+            if (fabs(dx) > linear_threshold || fabs(dy) > linear_threshold) 
+            {
+                cmd.linear.x = std::sqrt(dx*dx + dy*dy) * 0.25; // Distance to target * some control gain
+                
+                if (cmd.linear.x > xMax) 
+                {
+                    cmd.linear.x = xMax;
+                } 
+                else if (cmd.linear.x < xMin) 
+                {
+                    cmd.linear.x = xMin;
+                }
+            } 
+            else 
+            {
+                cmd.linear.x = 0.0;
+            }
+
+            // Angular control to face towards the cart frame.
+            if (fabs(target_yaw) > angular_threshold) 
+            {
+                cmd.angular.z = target_yaw * 0.3; // Yaw difference * some control gain
+                
+                if (cmd.angular.z > zMax) 
+                {
+                    cmd.angular.z = zMax;
+                } 
+                else if (cmd.angular.z < zMin) 
+                {
+                    cmd.angular.z = zMin;
+                }
+            } 
+            else 
+            {
+                cmd.angular.z = 0.0;
+            }
+
+            vel_pub_->publish(cmd);
+            
+            // Break condition
+            if (fabs(dx) < 0.1 && fabs(dy) < 0.1)
+            {
+                break;
+            }
+
+            // Sleep for 100 milliseconds
+            rclcpp::sleep_for(100ms);
+        }
+    }
+
+    //function to move robot forward
+    void moveRobotForward()
+    {
+        // Desired distance to move forward
+        double desired_distance = 0.30; // 30 cm
+        double starting_x = current_x;
+        double starting_y = current_y;
+
+        while (rclcpp::ok()) 
+        {
+            // Calculate the distance traveled since starting the move
+            double dx = current_x - starting_x;
+            double dy = current_y - starting_y;
+            double traveled_distance = std::sqrt(dx*dx + dy*dy);
+
+            // Create a twist message
+            geometry_msgs::msg::Twist cmd;
+            double xMax = 0.5, xMin = 0.05;
+            double linear_threshold = 0.02; // Slightly smaller threshold to ensure accurate stopping
+
+            // Check if the desired distance is reached or almost reached
+            if (traveled_distance < (desired_distance - linear_threshold)) 
+            {
+                double remaining_distance = desired_distance - traveled_distance;
+                cmd.linear.x = remaining_distance * 0.25; // Distance remaining * control gain
+                
+                if (cmd.linear.x > xMax) 
+                {
+                    cmd.linear.x = xMax;
+                } 
+                else if (cmd.linear.x < xMin) 
+                {
+                    cmd.linear.x = xMin;
+                }
+            } 
+            else 
+            {
+                cmd.linear.x = 0.0;
+            }
+
+            vel_pub_->publish(cmd);
+
+            // Break condition: If we have traveled the desired distance or more, stop moving
+            if (traveled_distance >= desired_distance)
+            {
+                break;
+            }
+
+            // Sleep for 100 milliseconds
+            rclcpp::sleep_for(100ms);
+        }
+    }
+
+    //function to move elevator up
+    void raiseElevator()
+    {
+        std_msgs::msg::Empty msg;
+        elevator_up_pub_->publish(msg);
+    }
+
+    void lowerElevator()
+    {
+        std_msgs::msg::Empty msg;        
+        elevator_down_pub_->publish(msg);
+    }
+
+
+
+
+
+    void approachCallback(const std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Request> request, std::shared_ptr<checkpoint5_interfaces::srv::GoToLoading::Response> response)
+    {
+        if (request->attach_to_shelf)
+        {
+            processLaserData();
+
+            if (detectedLegs.size() < 2)
+            {
+                response->complete = false;
+                return;
+            }
+
+            //set the cart TF
+            cartTFSet();
+
+            // output if cart set was successful 
+
+            //move robot to set point 
+            moveRobotToCartTF();
+
+            //move robot another 30 cm forward
+            moveRobotForward();
+
+            //elevator up function
+            raiseElevator();
+
+            //elevator down function
+            lowerElevator();
+
+        }
+        else
+        {
+            cartTFSet();
+            response->complete = false;
+        }
+    }
+
 };
 
 int main(int argc, char **argv)
