@@ -1,6 +1,10 @@
 #include "checkpoint5_interfaces/srv/detail/go_to_loading__struct.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rcl_interfaces/msg/detail/parameter_descriptor__struct.hpp"
+#include "rclcpp/callback_group.hpp"
+#include "rclcpp/executors/multi_threaded_executor.hpp"
+#include "rclcpp/qos.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "checkpoint5_interfaces/srv/go_to_loading.hpp"
@@ -9,234 +13,263 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <chrono>
 #include <mutex>
-#include "checkpoint5_interfaces/srv/go_to_loading.hpp"
-
+#include <cmath>
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
 
-class ObstacleAvoidanceNode : public rclcpp::Node {
-public:
-  ObstacleAvoidanceNode()
-      : Node("obstacle_avoidance_node") {
+class ServiceClientNode : public rclcpp::Node
+{
+    public:
+        ServiceClientNode() : Node("ServiceClientNode")
+        {
+            // parameter declaration
+            //obstacle parameter
+            auto obstacleParam_desc = rcl_interfaces::msg::ParameterDescriptor{};
+            obstacleParam_desc.description = "obstacle parameter";
+            this->declare_parameter<double>("obstacle", 0.3, obstacleParam_desc);
 
-    float obstacle_distance_ = 0.0;
-    double degrees_ = 0.0;
+            //degree parameter
+            auto degreeParam_desc = rcl_interfaces::msg::ParameterDescriptor{};
+            degreeParam_desc.description = "degree parameter";
+            this->declare_parameter<double>("degree", 90.0, degreeParam_desc);
 
-    this->declare_parameter<double>("obstacle_distance", 0.3); // Default value of 0.3 meters
-    this->declare_parameter<double>("degrees", -90.0); // Default value of -90 degrees
+            //approach parameter
+            auto approachParam_desc = rcl_interfaces::msg::ParameterDescriptor{};
+            approachParam_desc.description = "approach parameter";
+            this->declare_parameter<bool>("approach", 0.3, approachParam_desc);
 
-    // Then, get the parameters' values
-    this->get_parameter("obstacle_distance", obstacle_distance_);
-    this->get_parameter("degrees", degrees_);
-    degrees_ = degrees_ * M_PI / 180.0; // Convert degrees to radians
-    
-    // Subscribe to the /scan topic
-    scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/scan", 10, std::bind(&ObstacleAvoidanceNode::scanCallback, this, std::placeholders::_1));
-    
-    // Subscribe to the /odom topic to get the robot's yaw angle
-    odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", 10, std::bind(&ObstacleAvoidanceNode::odometryCallback, this, std::placeholders::_1));
+            // callback group clbg
+            clbg = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);  
+            //subscription Options
+            rclcpp::SubscriptionOptions subOptions;
+            subOptions.callback_group = clbg;
 
-    // Publish to the /robot/cmd_vel topic
-    cmd_vel_publisher_ =
-        this->create_publisher<geometry_msgs::msg::Twist>("/robot/cmd_vel", 10);
+            //subscribers
+            laserSubscriber = this->create_subscription<sensor_msgs::msg::LaserScan>("scan", rclcpp::SensorDataQoS(), std::bind(&ServiceClientNode::laserCallback, this, _1), subOptions); 
 
-    // Set the linear velocity to move the robot forward
-    linear_velocity_ = 0.2; 
+            //odometry subscriber
+            odometrySubscriber = this->create_subscription<nav_msgs::msg::Odometry>("odom", rclcpp::SensorDataQoS(), std::bind(&ServiceClientNode::odometryCallback, this, _1), subOptions);
 
-    // Create a timer to periodically check for obstacles and control the robot
-    timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(100),
-        std::bind(&ObstacleAvoidanceNode::timer_callback, this));
+            //publishers
+            //velocity publisher to the robot/cmd_vel topic
+            velocityPublisher = this->create_publisher<geometry_msgs::msg::Twist>("robot/cmd_vel", 10);
 
-    //create a client to call the checkpoint5_interface::srv::GoToLoading service
-    client_ = this->create_client<checkpoint5_interfaces::srv::GoToLoading>("/approach_shelf");
- 
-  }
+            //timer 
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&ServiceClientNode::timerCallback, this));
 
-  bool is_service_done() const {
-    // inspired from action client c++ code
-    return this->service_done_;
+            //client to call the service
+            client_ = this->create_client<checkpoint5_interfaces::srv::GoToLoading>("approach_shelf");
+        }
+    private:
+    //parameter variables
+    double obstacle;
+    double degree;
+    bool approach;
 
-  }
+    int front;
+    bool final = false;
+    float front_range = 0.0;
+    double rotation = 0.0;
+    double desired_rotation = 0.0;
+    //switch statement variable
+    int phase = 1;
 
-private:
+    //velocity message
+    geometry_msgs::msg::Twist cmd;
 
-  void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan) {
-    float min_distance = *std::min_element(scan->ranges.begin(), scan->ranges.end());
+    //declare subscriber 
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laserSubscriber;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometrySubscriber;
 
-    if (min_distance <= obstacle_distance_ && !stop_rotation_) {
-      aligning_to_shelf_ = true;
-      stop_rotation_ = true; // Stop rotating
+    //declare publisher
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr velocityPublisher;
 
-      // Stop the robot and align to the shelf
-      stopRobot();
-      alignToShelf();
-    } else if (aligning_to_shelf_ && std::abs(yaw_ - degrees_) < 0.05) {
-      // Continue aligning to the shelf until the desired angle is reached
-      stopRobot();
-      alignToShelf();
-    } else if (!stop_rotation_) {
-      // If the robot is not already stopped and not aligning to the shelf, move
-      // it forward
-      moveRobotForward();
-    }
-}
+    //declare timer
+    rclcpp::TimerBase::SharedPtr timer_;
 
+    //declare client
+    rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr client_;
 
-  void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odom) {
-    // Process odometry data quickly
-    // Avoid time-consuming operations here
-
-    // Get the robot's yaw angle from the odometry data
-    auto orientation = odom->pose.pose.orientation;
-    // Convert the orientation to a quaternion and extract the yaw from the
-    // quaternion
-    tf2::Quaternion q(orientation.x, orientation.y, orientation.z, orientation.w);
-    tf2::Matrix3x3 m(q);
-    double roll, pitch, yaw;
-    m.getRPY(roll, pitch, yaw);
-    yaw_ = yaw;
-    
-  }
+    //declare callback group
+    rclcpp::CallbackGroup::SharedPtr clbg;
 
 
- /*void callService() {
-    
-    //create a request
-    auto request = std::make_shared<checkpoint5_interfaces::srv::GoToLoading::Request>();
-    //set the request to attach
-    request->attach_to_shelf = true;
-    while(!approach_shelf_client_->wait_for_service(std::chrono::seconds(1))){
-        if(!rclcpp::ok()){
-      RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Interrupted while waiting for the service. Exiting.");
-      break;
-    }
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "service not available, waiting again...");
-  }
-
-  auto result_future = approach_shelf_client_->async_send_request(request, std::bind(&ObstacleAvoidanceNode::response_callback, this, std::placeholders::_1));
-  
-  }*/
-
-  void timer_callback() {
-    while (!client_->wait_for_service(1s)) {
-      if (rclcpp::ok()) {
-        RCLCPP_ERROR(
-            this->get_logger(),
-            "Client interrupted while waiting for service. Terminating...");
-        return;
-      }
-      RCLCPP_INFO(this->get_logger(),
-                  "Service Unavailable. Waiting for Service...");
+    //*******helper functions
+    double deg2rad(double degree){
+        return degree * M_PI / 180;
     }
 
-    auto request = std::make_shared<checkpoint5_interfaces::srv::GoToLoading::Request>();
-    // set request variables here, if any
-    request->attach_to_shelf = true; // comment this line if using Empty() message
-
-    service_done_ = false; // inspired from action client c++ code
-    auto result_future = client_->async_send_request(
-        request, std::bind(&ObstacleAvoidanceNode::response_callback, this,
-                           std::placeholders::_1));
-  }
-
-
-  void response_callback(
-    rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedFuture future) {
-    auto status = future.wait_for(1s);
-    if (status == std::future_status::ready) {
-      service_response_ = future.get()->complete;
-      RCLCPP_INFO(this->get_logger(), "Result: success: %d", service_response_);
-      service_done_ = true;
+    bool positioned(){
+    rotation = round(rotation*1000)/10000;
+    desired_rotation = round(desired_rotation*1000)/10000;
+    //if desired rotation is greater than 0 and rotation is greater than or equal to desired rotation
+    if(desired_rotation > 0 && rotation >= desired_rotation){
+        return true;
+    } else if(desired_rotation < 0 && rotation <= desired_rotation){
+        //if desired rotation is less than 0 and rotation is less than or equal to desired rotation
+        return true;
     } else {
-      RCLCPP_INFO(this->get_logger(), "Service In-Progress...");
+        //if neither of the above, return false
+        return false;
+        }
     }
-  }
+    //********
 
-  
 
-  void moveRobotForward() {
-    auto twist = geometry_msgs::msg::Twist();
-    twist.linear.x = linear_velocity_;
-    twist.angular.z = 0.0;
-    cmd_vel_publisher_->publish(twist);
-  }
-
-  void stopRobot() {
-    auto twist = geometry_msgs::msg::Twist();
-    twist.linear.x = 0.0;
-    twist.angular.z = 0.0;
-    cmd_vel_publisher_->publish(twist);
-  }
-
-  void rotateRobot() {
-    auto twist = geometry_msgs::msg::Twist();
-
-    double angle_difference = std::abs(yaw_ - degrees_);
-
-    if (angle_difference <= 0.05) {
-      // If the desired angle is reached (within a tolerance), stop rotating
-      twist.angular.z = 0.0;
-      stop_rotation_ = false;
-    } else {
-      // Continue rotating towards the desired angle in radians
-      twist.angular.z = degrees_ > 0 ? 0.2 : -0.2;
+    //laser callback definition
+    void laserCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan)
+    {   
+        front = round(scan->angle_max*2/scan->angle_increment)/2;
+        front_range = scan->ranges[front];
     }
 
-    cmd_vel_publisher_->publish(twist);
-  }
-
-  void alignToShelf() {
-    auto twist = geometry_msgs::msg::Twist();
-    twist.linear.x = 0.0;
-
-    double angle_difference = std::abs(yaw_ - degrees_);
-
-    if (angle_difference <= 0.05) {
-        // If the desired angle is reached (within a tolerance), stop rotation
-        twist.angular.z = 0.0;
-        aligning_to_shelf_ = false; // Added this line
-    } else {
-        // Calculate the rotation direction (positive or negative)
-        double rotation_direction = (yaw_ < degrees_) ? 1.0 : -1.0;
-        twist.angular.z = rotation_direction * 0.2; // Use the calculated direction
+    void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry){
+        //get the current orientation
+        auto orientation = odometry->pose.pose.orientation;
+        //convert to quaternion
+        tf2::Quaternion q(orientation.x, orientation.y, orientation.z, orientation.w);
+        //convert to euler
+        tf2::Matrix3x3 m(q);
+        double roll, pitch, yaw;
+        m.getRPY(roll, pitch, yaw);
+        rotation = yaw;
     }
+    void timerCallback()
+    {
+        //get the parameter values
+        
+        this->get_parameter("obstacle", obstacle);
+        
+        this->get_parameter("degree", degree);
 
-    cmd_vel_publisher_->publish(twist);
-}
+        this->get_parameter("approach", approach);
+        //call deg2rad function using desired_rotation to convert degree to radian
+        desired_rotation = deg2rad(degree);
 
-  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_subscriber_;
-  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
-  //rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr approach_shelf_client_;
-  rclcpp::Client<checkpoint5_interfaces::srv::GoToLoading>::SharedPtr client_;
-  //create a memeber for
+        //declare cmd velocity constants
+        const static float xMax = 0.5;
+        const static float zMax = 0.5;
+        const static float zMin = 0.1;
 
-  //create a memeber for service response
-  float linear_velocity_;
-  float obstacle_distance_;
-  double degrees_; // Degrees converted to radians
-  bool stop_rotation_;
-  bool aligning_to_shelf_;
-  double yaw_;
-  rclcpp::TimerBase::SharedPtr timer_;
-  bool service_done_ = false;
-  bool service_response_ = false;
+        //create a switch statement to switch between phases
+        //initialize the service request
+        auto request = std::make_shared<checkpoint5_interfaces::srv::GoToLoading::Request>();
+        switch(phase){
+            case 1:
+
+                //robot is moving forward and not turning 
+                cmd.angular.z = 0.0;
+                cmd.linear.x = (front_range - obstacle) * 0.75;
+                //if linear velocity is greater than xMax, set it to xMax
+                if(cmd.linear.x > xMax){
+                    cmd.linear.x = xMax;
+                }
+                //if front_range is less than obstacle, stop the robot and change phase
+                if(front_range < obstacle){
+                    cmd.linear.x = 0.0;
+                    //display "Stopped. Ready to rotate into position" to the terminal
+                    RCLCPP_INFO(this->get_logger(), "Stopped. Ready to rotate into position");
+                    //change phase
+                    phase = 2;
+                }
+                break;
+            case 2:
+                //robot is ready to turn to the desired_rotation
+                cmd.linear.x = 0.0;
+                cmd.angular.z = (desired_rotation - rotation) * 0.25;
+                //if the difference between desired_rotation and rotation is greater than 0.0, stop the robot 
+                if((desired_rotation - rotation) > 0.0){
+                    //if angular velocity is greater than zMax, set it to zMax
+                    if(cmd.angular.z > zMax){
+                        cmd.angular.z = zMax;
+                    } else if(cmd.angular.z < zMin){
+                        //if angular velocity is less than zMin, set it to zMin
+                        cmd.angular.z = zMin;
+                    }
+                } else if (desired_rotation - rotation < 0.0){
+                    //if the difference between desired_rotation and rotation is less than 0.0, stop the robot 
+                    //if angular velocity is less than -zMax, set it to -zMax
+                    if(cmd.angular.z < -zMax){
+                        cmd.angular.z = -zMax;
+                    } else if(cmd.angular.z > -zMin){
+                        //if angular velocity is greater than -zMin, set it to -zMin
+                        cmd.angular.z = -zMin;
+                    }
+                }
+                //if the robot is positioned, stop the robot and change phase
+                if(positioned()){
+                    cmd.angular.z = 0.0;
+                    //display "Positioned. Ready to approach shelf" to the terminal
+                    RCLCPP_INFO(this->get_logger(), "Positioned. Ready to approach shelf");
+                    //change phase
+                    phase = 3;
+                }
+                break;
+            case 3:
+
+                //display "Approaching shelf" to the terminal
+                RCLCPP_INFO(this->get_logger(), "Approaching shelf");
+                
+                //set the request to the approach parameter
+                request->attach_to_shelf = approach;
+                //while final is false, call the service
+                while(!final){
+                    //while client is not ready, wait
+                    while(!client_->wait_for_service(1s)){
+                            RCLCPP_INFO(this->get_logger(), "service not avaialable, waiting again...");
+                    }
+                    //call the service
+                    auto res_future = client_->async_send_request(request);
+                    //wait for the result
+                    std::future_status status = res_future.wait_for(5s);
+                    // if status is ready display respond recieved
+                    if(status == std::future_status::ready){
+                        RCLCPP_INFO(this->get_logger(), "Response recieved");
+                        //assign response to res_future.get()
+                        auto result = res_future.get();
+                        //if result is set to complete
+                        if(result->complete){
+                            //display "Approach complete" to the terminal
+                            RCLCPP_INFO(this->get_logger(), "Approach complete");
+                            //set final to true
+                            final = true;
+                        }else if(!result->complete){
+                        //if result is not set to complete, display "Approach failed" to the terminal
+                        RCLCPP_INFO(this->get_logger(), "Approach failed");
+                        //set final to true
+                        final = true;
+                    }
+                  }
+                }
+                //change phase
+                phase = 4;
+                break;
+            case 4:
+                //display "Approach complete" to the terminal
+                RCLCPP_INFO(this->get_logger(), "Approach complete");
+            break;
+    
+            default:
+                //display IDLE to the terminal
+                RCLCPP_INFO(this->get_logger(), "IDLE");
+                if(!final){
+                    velocityPublisher->publish(cmd);
+                }
+            
+        }
+    }
 
 };
 
 
-int main(int argc, char **argv) {
-  rclcpp::init(argc, argv);
-// Create the ObstacleAvoidanceNode with parameter values
-  auto obstacle_avoidance_node = std::make_shared<ObstacleAvoidanceNode>();
-   while (!obstacle_avoidance_node->is_service_done()) {
-    rclcpp::spin_some(obstacle_avoidance_node);
-  }
-
-  rclcpp::shutdown();
-  return 0;
+int main(int argc, char **argv)
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<ServiceClientNode>();
+    rclcpp::executors::MultiThreadedExecutor exec;
+    exec.add_node(node);
+    exec.spin();
+    rclcpp::shutdown();
+    return 0;
 }

@@ -138,6 +138,7 @@ private:
         // If the desired angle is reached (within a tolerance), stop rotation
         twist.angular.z = 0.0;
         aligning_to_shelf_ = false; // Added this line
+        preapproach_finished = true;
     } else {
         // Calculate the rotation direction (positive or negative)
         double rotation_direction = (yaw_ < degrees_) ? 1.0 : -1.0;
@@ -145,6 +146,7 @@ private:
     }
 
     cmd_vel_publisher_->publish(twist);
+
 
 }
 
@@ -159,6 +161,7 @@ private:
   bool aligning_to_shelf_;
   double yaw_;
   rclcpp::TimerBase::SharedPtr timer_;
+  bool preapproach_finished;
 };
 
 
